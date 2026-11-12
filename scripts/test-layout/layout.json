@@ -326,6 +326,7 @@
     "catalog-zero-credit-picker.test.ts": "codex-integration",
     "chat-completions-deferred-tools.test.ts": "responses", "passthrough-deferred-tools.test.ts": "responses",
     "cache-keepalive.test.ts": "responses",
+    "reasoning-envelope-store.test.ts": "responses",
     "chat-completions-endpoint.test.ts": "responses",
     "chat-request-id-endpoint.test.ts": "responses",
     "chat-completions-pool-mode.test.ts": "responses",

@@ -22,7 +22,7 @@ import { mayBecomePatchEnvelope, repairFreeformToolInput } from "../responses/ap
 import { encodeCompactionSummary, releaseCompactionCiphertextLease } from "../responses/compaction";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
 import { isTruncatedStopReason, truncationReasonFor } from "../responses/truncated-stop-reason";
-import { encodeReasoningEnvelope, type ReasoningEnvelope } from "../responses/reasoning-envelope";
+import { encodeReasoningEnvelope, externalizeReasoningEnvelope, type ReasoningEnvelope } from "../responses/reasoning-envelope";
 import { rememberReasoningForCall } from "../responses/reasoning-replay-cache";
 import {
   rememberAndSerializeExtraContent,
@@ -281,7 +281,7 @@ function buildResponseJSONWithBudget(
     if (batchRedacted.length > 0) envelope.red = batchRedacted;
     const hidden = options?.hideThinkingSummary === true;
     if (hidden && summaryText && (envelope.sig || envelope.red)) envelope.txt = summaryText;
-    const encrypted = envelope.sig || envelope.red || envelope.txt ? encodeReasoningEnvelope(envelope, budget) : undefined;
+    const encrypted = envelope.sig || envelope.red || envelope.txt ? externalizeReasoningEnvelope(encodeReasoningEnvelope(envelope, budget)) : undefined;
     const sourceBytes = currentSummaryReasoning.bytes + batchSignatureBytes + batchRedactedBytes;
     batchSignature = undefined;
     batchSignatureAfter = undefined;
@@ -314,7 +314,7 @@ function buildResponseJSONWithBudget(
       // Same contract as the streaming path: no visible reasoning, txt-only envelope round-trip.
       pushOutput({
         type: "reasoning", id: `rs_${uuid()}`, summary: [],
-        encrypted_content: encodeReasoningEnvelope({ txt: rawText }, budget),
+        encrypted_content: externalizeReasoningEnvelope(encodeReasoningEnvelope({ txt: rawText }, budget)),
       }, currentRawReasoning.bytes, "reasoning");
       currentRawReasoning = emptyChunks();
       return;
@@ -631,7 +631,7 @@ function buildResponseJSONWithBudget(
     // pushOutput reserves the item itself and releases the retained raw blob it replaces.
     pushOutput({
       type: "reasoning", id: `rs_${uuid()}`, summary: [],
-      encrypted_content: encodeReasoningEnvelope({ krc: batchKiroRedacted }, budget),
+      encrypted_content: externalizeReasoningEnvelope(encodeReasoningEnvelope({ krc: batchKiroRedacted }, budget)),
     }, batchKiroRedactedBytes, "reasoning");
     batchKiroRedacted = undefined;
     batchKiroRedactedBytes = 0;

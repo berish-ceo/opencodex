@@ -445,6 +445,7 @@
   "protocol-envelope.test.ts": "responses", "protocol-guard.test.ts": "responses",
   "protocol-ingress-guard.test.ts": "responses", "protocol-direct-encoders-chat.test.ts": "responses",
   "cache-keepalive.test.ts": "responses",
+  "reasoning-envelope-store.test.ts": "responses",
   "protocol-direct-encoders-stall-disabled.test.ts": "responses",
   "protocol-direct-encoders-local-upstream.test.ts": "responses",
   "protocol-chat-ir-parity.test.ts": "responses", "protocol-antigravity-direct-chat.test.ts": "responses",

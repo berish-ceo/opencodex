@@ -14,6 +14,7 @@
 
 import { createTranslatorBudget, type TranslatorBudget } from "../lib/translator-budget";
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
+import { loadReasoningEnvelope, storeReasoningEnvelope } from "./reasoning-envelope-store";
 
 export const OCX_REASONING_PREFIX = "ocxr1:";
 
@@ -94,6 +95,17 @@ export function encodeReasoningEnvelope(envelope: ReasoningEnvelope, budget?: Tr
 }
 
 /**
+ * LOCAL PATCH (reasoning-envelope-store): the client-facing form of an encoded envelope. Codex
+ * estimates `len * 3 / 4 - 650` bytes per earlier reasoning item, so up to 866 chars cost
+ * nothing; a larger envelope is kept by the proxy and the client gets a short reference.
+ */
+export function externalizeReasoningEnvelope(encoded: string): string {
+  if (encoded.length <= 866) return encoded;
+  const ref = storeReasoningEnvelope(encoded);
+  return ref === undefined ? encoded : OCX_REASONING_PREFIX + Buffer.from(JSON.stringify({ ref }), "utf-8").toString("base64");
+}
+
+/**
  * Whether a thinking part's `signature` is an attestation some provider issued, rather than
  * the serialized reasoning item the parser parks in the same field.
  *
@@ -136,7 +148,7 @@ export function isLikelyRealAnthropicThinkingSignature(signature: string | undef
 }
 
 /** Decode an ocxr1 envelope; returns null for native (OpenAI-encrypted) blobs or garbage. */
-export function decodeReasoningEnvelope(encryptedContent: string, budget?: TranslatorBudget): ReasoningEnvelope | null {
+export function decodeReasoningEnvelope(encryptedContent: string, budget?: TranslatorBudget, resolveRef = true): ReasoningEnvelope | null {
   if (!encryptedContent.startsWith(OCX_REASONING_PREFIX)) return null;
   const activeBudget = budget ?? createTranslatorBudget();
   try {
@@ -146,6 +158,12 @@ export function decodeReasoningEnvelope(encryptedContent: string, budget?: Trans
     try {
       const parsed: unknown = JSON.parse(Buffer.from(encryptedContent.slice(OCX_REASONING_PREFIX.length), "base64").toString("utf-8"));
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+      // LOCAL PATCH (reasoning-envelope-store): a reference decodes as the envelope it names.
+      const ref = (parsed as { ref?: unknown }).ref;
+      if (ref !== undefined) {
+        const stored = resolveRef && typeof ref === "string" ? loadReasoningEnvelope(ref) : undefined;
+        return stored === undefined ? null : decodeReasoningEnvelope(stored, activeBudget, false);
+      }
       const obj = parsed as { sig?: unknown; red?: unknown };
       const envelope: ReasoningEnvelope = {};
       if (typeof obj.sig === "string") envelope.sig = obj.sig;

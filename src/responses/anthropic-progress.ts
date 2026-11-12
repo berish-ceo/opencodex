@@ -1,4 +1,4 @@
-import { encodeReasoningEnvelope, decodeReasoningEnvelope, type ReasoningEnvelope } from "./reasoning-envelope";
+import { encodeReasoningEnvelope, decodeReasoningEnvelope, externalizeReasoningEnvelope, type ReasoningEnvelope } from "./reasoning-envelope";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
 /** A visible update is a presentation copy of one original signed thinking block. */
@@ -6,7 +6,7 @@ export function anthropicProgressItems(text: string, signature: string, budget?:
   const id = `msg_${crypto.randomUUID().replaceAll("-", "")}`;
   return [
     { type: "reasoning", id: `rs_${crypto.randomUUID().replaceAll("-", "")}`, summary: [],
-      encrypted_content: encodeReasoningEnvelope({ sig: signature, txt: text, upd: id }, budget) },
+      encrypted_content: externalizeReasoningEnvelope(encodeReasoningEnvelope({ sig: signature, txt: text, upd: id }, budget)) },
     { type: "message", id, role: "assistant", status: "completed", phase: "commentary",
       content: [{ type: "output_text", text, annotations: [] }] },
   ];
