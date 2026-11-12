@@ -29,7 +29,7 @@ import { encodeCompactionSummary, releaseCompactionCiphertextLease } from "../re
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
 import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
 import { isTruncatedStopReason, truncationReasonFor } from "../responses/truncated-stop-reason";
-import { encodeReasoningEnvelope, type ReasoningEnvelope } from "../responses/reasoning-envelope";
+import { encodeReasoningEnvelope, externalizeReasoningEnvelope, type ReasoningEnvelope } from "../responses/reasoning-envelope";
 import { rememberReasoningForCall } from "../responses/reasoning-replay-cache";
 import {
   rememberAndSerializeExtraContent,
@@ -405,7 +405,7 @@ export function bridgeToResponsesSSE(
         const previousBytes = pendingSignatureBytes
           + pendingRedacted.reduce((sum, value) => sum + bytesOf(value), 0)
           + (hiddenText ? hiddenThinking.bytes : 0);
-        const encoded = encodeReasoningEnvelope(envelope, budget);
+        const encoded = externalizeReasoningEnvelope(encodeReasoningEnvelope(envelope, budget));
         const reservation = budget?.reserveTransient(bytesOf(encoded), { kind: "reasoning" });
         pendingSignature = undefined;
         pendingSignatureAfter = undefined;
@@ -504,7 +504,7 @@ export function bridgeToResponsesSSE(
         if (!hiddenRawText) return;
         rawReasoningForNextToolCall = hiddenRawText;
         const previousBytes = hiddenRawReasoning.bytes;
-        const encrypted = encodeReasoningEnvelope({ txt: hiddenRawText }, budget);
+        const encrypted = externalizeReasoningEnvelope(encodeReasoningEnvelope({ txt: hiddenRawText }, budget));
         const reservation = budget?.reserveTransient(bytesOf(encrypted), { kind: "reasoning" });
         hiddenRawReasoning = emptyChunks();
         reservation?.commitRetained();
@@ -521,7 +521,7 @@ export function bridgeToResponsesSSE(
       const flushKiroRedactedReasoning = () => {
         if (!pendingKiroRedacted) return;
         const previousBytes = pendingKiroRedactedBytes;
-        const encrypted = encodeReasoningEnvelope({ krc: pendingKiroRedacted }, budget);
+        const encrypted = externalizeReasoningEnvelope(encodeReasoningEnvelope({ krc: pendingKiroRedacted }, budget));
         const reservation = budget?.reserveTransient(bytesOf(encrypted), { kind: "reasoning" });
         pendingKiroRedacted = undefined;
         pendingKiroRedactedBytes = 0;
