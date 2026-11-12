@@ -10,6 +10,7 @@ import { debugDroppedFrame } from "../lib/debug";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
+  OcxCacheRetention,
   OcxContentPart,
   OcxMessage,
   OcxParsedRequest,
@@ -40,7 +41,7 @@ import { resolveThinkingEnabled } from "../clients/reasoning-controls";
 import { resolveReasoningCapabilities } from "../providers/reasoning-capabilities";
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
-import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
+import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention } from "./anthropic/cache-retention";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
@@ -82,14 +83,18 @@ const COMPAT_TOOL_PREFIX = "cx_";
 type CacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
 const MAX_CACHE_BREAKPOINTS = 4;
 
+/** TTLs for one request: `stable` marks the reusable prefix, `tail` the moving agent-loop end. */
+type CachePlan = { stable: CacheControl; tail: CacheControl };
+
 /** Omitted retention follows the destination default (1h on first-party Anthropic, else 5m). */
-function resolveCacheControl(
-  retention: AnthropicCacheRetention | undefined,
-  provider: OcxProviderConfig,
-): CacheControl | undefined {
+function resolveCachePlan(retention: OcxCacheRetention | undefined, provider: OcxProviderConfig): CachePlan | undefined {
   const r = resolveAnthropicCacheRetention(retention, provider);
   if (r === "none") return undefined;
-  return r === "long" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
+  const long: CacheControl = { type: "ephemeral", ttl: "1h" };
+  const short: CacheControl = { type: "ephemeral" };
+  if (r === "long") return { stable: long, tail: long };
+  if (r === "hybrid") return { stable: long, tail: short };
+  return { stable: short, tail: short };
 }
 // ---------------------------------------------------------------------------
 // Prompt-caching breakpoint placement (ported from jawcode)
@@ -106,17 +111,121 @@ function resolveCacheControl(
 function applyCacheControlToLast<T extends Record<string, unknown>>(blocks: T[], cc: CacheControl): void {
   if (blocks.length === 0) return;
   const i = blocks.length - 1;
-  blocks[i] = { ...blocks[i], cache_control: cc };
+  // A fresh object per block: normalizeTtlOrdering demotes a breakpoint by mutating it in place.
+  blocks[i] = { ...blocks[i], cache_control: { ...cc } };
 }
 
 function applyCacheControlToLastText(blocks: Array<Record<string, unknown>>, cc: CacheControl): void {
   for (let i = blocks.length - 1; i >= 0; i--) {
     if (blocks[i].type === "text") {
-      blocks[i] = { ...blocks[i], cache_control: cc };
+      blocks[i] = { ...blocks[i], cache_control: { ...cc } };
       return;
     }
   }
   applyCacheControlToLast(blocks, cc);
+}
+
+function markMessageCacheBreakpoint(msg: Record<string, unknown>, cc: CacheControl): boolean {
+  if (typeof msg.content === "string") {
+    msg.content = [{ type: "text", text: msg.content, cache_control: { ...cc } }];
+    return true;
+  }
+  if (Array.isArray(msg.content) && msg.content.length > 0) {
+    applyCacheControlToLastText(msg.content as Array<Record<string, unknown>>, cc);
+    return true;
+  }
+  return false;
+}
+
+function hasMessageCacheBreakpoints(messages: Array<Record<string, unknown>> | undefined): boolean {
+  return !!messages?.some(msg => Array.isArray(msg.content)
+    && (msg.content as Array<Record<string, unknown>>).some(b => b.cache_control != null));
+}
+
+/**
+ * Turn a fully built request into Anthropic's documented cache pre-warm: `max_tokens: 0` reads
+ * the prompt, refreshes every cached prefix it hits, and returns no output. Everything rendered
+ * into the prompt (thinking, effort, tools, breakpoints) stays exactly as the real call built it,
+ * because any difference would key a different cache entry. The API rejects a zero budget with
+ * extended thinking, a forced tool choice, structured output, or streaming.
+ */
+function applyCacheKeepalivePing(body: Record<string, unknown>): void {
+  const thinking = body.thinking as { type?: unknown } | undefined;
+  const toolChoice = body.tool_choice as { type?: unknown } | undefined;
+  const outputConfig = body.output_config as { format?: unknown } | undefined;
+  if (thinking?.type === "enabled" || toolChoice?.type === "any" || toolChoice?.type === "tool"
+    || outputConfig?.format !== undefined) {
+    throw new Error("cache keepalive cannot pre-warm a request with extended thinking, a forced tool choice, or structured output");
+  }
+  body.stream = false;
+  body.max_tokens = 0;
+}
+
+/**
+ * A user-role message written by the person rather than a pure tool_result carrier. Anthropic
+ * puts tool results in user-role messages, so role alone would move the anchor on every tool call.
+ */
+function isHumanUserMessage(msg: Record<string, unknown>): boolean {
+  if (msg.role !== "user") return false;
+  if (typeof msg.content === "string") return msg.content.length > 0;
+  return Array.isArray(msg.content)
+    && msg.content.some(block => !isAnthropicRecord(block) || block.type !== "tool_result");
+}
+
+/**
+ * "hybrid" placement. Long-TTL breakpoints sit on boundaries that survive a human pause: the
+ * system prompt (its prefix also covers tools) and the two latest human messages. Both human
+ * anchors are required because Anthropic looks back only about 20 blocks from a breakpoint for an
+ * earlier hit; after a long tool loop the previous turn's anchor is out of reach of the new one.
+ * The moving agent-loop end gets the short TTL.
+ *
+ * Returns the TTL for the native top-level automatic breakpoint. When the newest human message
+ * is the final message (the first request of a turn) the automatic breakpoint lands on the same
+ * block as that anchor and must carry the same TTL, otherwise the API rejects the request.
+ */
+function applyHybridPromptCaching(
+  body: Record<string, unknown>,
+  plan: CachePlan,
+  explicitLimit: number,
+  automatic: boolean,
+  uncachedSystemTail: boolean,
+): CacheControl {
+  const messages = (body.messages as Array<Record<string, unknown>> | undefined) ?? [];
+  let used = 0;
+  const system = body.system as Array<Record<string, unknown>> | undefined;
+  const tools = body.tools as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(system) && system.length > 0) {
+    // Same rule as applyPromptCaching: a trailing per-turn system block stays uncached.
+    const i = system.length - (uncachedSystemTail && system.length > 1 ? 2 : 1);
+    system[i] = { ...system[i], cache_control: plan.stable };
+    used++;
+  } else if (Array.isArray(tools) && tools.length > 0) {
+    applyCacheControlToLast(tools, plan.stable);
+    used++;
+  }
+
+  const humanIdxs: number[] = [];
+  for (let i = 0; i < messages.length; i++) if (isHumanUserMessage(messages[i])) humanIdxs.push(i);
+  const anchored = new Set<number>();
+  for (const i of humanIdxs.slice(-2)) {
+    if (used >= explicitLimit) break;
+    if (markMessageCacheBreakpoint(messages[i], plan.stable)) {
+      anchored.add(i);
+      used++;
+    }
+  }
+
+  if (automatic) return anchored.has(messages.length - 1) ? plan.stable : plan.tail;
+
+  // Explicit-only endpoint: mark the moving tail ourselves.
+  let lastUser = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") { lastUser = i; break; }
+  }
+  if (lastUser >= 0 && !anchored.has(lastUser) && used < explicitLimit) {
+    markMessageCacheBreakpoint(messages[lastUser], plan.tail);
+  }
+  return plan.tail;
 }
 
 type PromptCachingOptions = {
@@ -139,13 +248,7 @@ function applyPromptCaching(
   const messages = body.messages as Array<Record<string, unknown>> | undefined;
 
   // Skip if external breakpoints are already present on messages.
-  if (messages) {
-    for (const msg of messages) {
-      if (Array.isArray(msg.content)) {
-        if ((msg.content as Array<Record<string, unknown>>).some(b => b.cache_control != null)) return;
-      }
-    }
-  }
+  if (hasMessageCacheBreakpoints(messages)) return;
 
   let used = 0;
 
@@ -174,24 +277,14 @@ function applyPromptCaching(
 
   // 3. penultimate user message
   if (userIdxs.length >= 2) {
-    const msg = messages[userIdxs[userIdxs.length - 2]];
-    if (typeof msg.content === "string") {
-      msg.content = [{ type: "text", text: msg.content, cache_control: cc }];
-    } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-      applyCacheControlToLastText(msg.content as Array<Record<string, unknown>>, cc);
-    }
+    markMessageCacheBreakpoint(messages[userIdxs[userIdxs.length - 2]], cc);
     used++;
   }
   if (used >= explicitLimit || options.skipLastUser) return;
 
   // 4. last user message
   if (userIdxs.length >= 1) {
-    const msg = messages[userIdxs[userIdxs.length - 1]];
-    if (typeof msg.content === "string") {
-      msg.content = [{ type: "text", text: msg.content, cache_control: cc }];
-    } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-      applyCacheControlToLastText(msg.content as Array<Record<string, unknown>>, cc);
-    }
+    markMessageCacheBreakpoint(messages[userIdxs[userIdxs.length - 1]], cc);
   }
 }
 
@@ -1031,7 +1124,7 @@ function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown>
   return normalized;
 }
 
-export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
+export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: OcxCacheRetention): ProviderAdapter {
   const isOAuth = provider.authMode === "oauth";
   const toolNames = buildToolNameTransforms(provider);
   let progressUpdates = false;
@@ -1304,17 +1397,28 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which
       // follows the moving final block across turns. Keep one breakpoint slot free for it.
-      const cc = resolveCacheControl(cacheRetention, provider);
-      const automaticPromptCaching = cc && usesNativeAnthropicEndpoint(provider);
-      if (automaticPromptCaching) body.cache_control = cc;
+      // A per-turn override (subagentCacheRetention) wins over the adapter's configured retention.
+      const plan = resolveCachePlan(parsed._cacheRetention ?? cacheRetention, provider);
+      const automaticPromptCaching = !!plan && usesNativeAnthropicEndpoint(provider);
       const explicitLimit = automaticPromptCaching ? MAX_CACHE_BREAKPOINTS - 1 : MAX_CACHE_BREAKPOINTS;
-      applyPromptCaching(body, cc, {
-        maxExplicitBreakpoints: explicitLimit,
-        skipLastUser: !!automaticPromptCaching,
-        uncachedSystemTail: system.length > 1,
-      });
+      const messagesForCache = body.messages as Array<Record<string, unknown>> | undefined;
+      if (plan && plan.stable.ttl !== plan.tail.ttl && !hasMessageCacheBreakpoints(messagesForCache)) {
+        const automaticCc = applyHybridPromptCaching(body, plan, explicitLimit, automaticPromptCaching, system.length > 1);
+        if (automaticPromptCaching) body.cache_control = automaticCc;
+      } else {
+        // Uniform TTL ("short"/"long"), or caller-owned message breakpoints under "hybrid",
+        // which then gets the short-TTL behavior rather than guessing around foreign anchors.
+        const cc = plan?.tail;
+        if (automaticPromptCaching && cc) body.cache_control = cc;
+        applyPromptCaching(body, cc, {
+          maxExplicitBreakpoints: explicitLimit,
+          skipLastUser: automaticPromptCaching,
+          uncachedSystemTail: system.length > 1,
+        });
+      }
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);
+      if (parsed._cacheKeepalivePing) applyCacheKeepalivePing(body);
 
       const request = {
         url,

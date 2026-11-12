@@ -118,7 +118,10 @@ export type {
   OcxVisionSidecarConfig,
   OcxWebSearchSidecarConfig,
   OcxClaudeCodeToolLoadingConfig,
+  OcxCacheRetention,
+  OcxCacheKeepaliveConfig,
 } from "./types/config";
+export { isOcxCacheRetention } from "./types/config";
 
 export type {
   RefreshPolicy,

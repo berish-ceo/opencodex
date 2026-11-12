@@ -1,7 +1,7 @@
 import type { ClientFacingModelLabel } from "../../lib/error-destination";
 import type { CodexAccountModelRefusal } from "../../combos/failover";
 import type { NativeResponseControl } from "./native-response-control";
-import type { AdapterEvent, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
+import type { AdapterEvent, OcxCacheRetention, OcxUsage, OcxProviderContinuationState, OcxConfig } from "../../types";
 import type { RouteResult } from "../../router";
 import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
@@ -249,6 +249,10 @@ export interface HandleResponsesOptions {
   comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */
   comboDispatchPermit?: SingleUseDispatchPermit;
+  /** Internal combo handoff: the combo's fixed prompt-cache retention for this child turn. */
+  comboCacheRetention?: OcxCacheRetention;
+  /** Internal: this request is a prompt-cache keepalive refresh (see cache-keepalive.ts). */
+  cacheKeepalivePing?: boolean;
   /** Internal handoff: this combo was selected by shadow-call interception. */
   shadowCallIntercepted?: boolean;
   /** Internal handoff: the memory phase this turn belongs to, so combo children keep its routing. */

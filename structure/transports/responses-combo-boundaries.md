@@ -250,3 +250,20 @@ ordinary failover by supplying the same header. The wire body remains `rate_limi
 The message says no additional provider request was sent when the current request already has
 physical sends; an admission refusal before its first send retains the no-provider wording.
 Coverage: `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-contract-c.test.ts`.
+
+## Combo prompt-cache keepalive
+
+A combo with `cacheKeepalive` keeps its 5-minute Anthropic prompt cache warm between calls on a
+thread. After a successful Responses child call, `src/server/responses/cache-keepalive-combo.ts`
+arms `src/server/responses/cache-keepalive.ts` under the request's own `thread-id` (parallel
+sub-agents share the parent id, so it cannot be the key). The window is anchored to the start of
+the thread's last real call: every call re-arms it, and any other call on the thread disarms it in
+`request-prepare.ts`, so switching the thread to another model stops the refreshes. A refresh
+replays that child request unchanged through `handleResponses` as an internal concrete turn
+(`comboAttempt`, `cacheKeepalivePing`); the Anthropic adapter sends it as the documented
+`max_tokens: 0` pre-warm and refuses extended thinking, forced tool choice and structured output,
+which the API rejects with a zero budget. The delivery layer keeps the empty response out of the
+continuation cache, and each refresh writes its own usage row marked `cacheKeepalive`. A refresh
+that writes cache tokens or fails ends the entry. Timers are process-local, unreferenced and
+bounded. `tests/responses/cache-keepalive.test.ts` pins the schedule and
+`tests/adapters/anthropic/anthropic-combo-cache-retention.test.ts` pins the replayed prompt.

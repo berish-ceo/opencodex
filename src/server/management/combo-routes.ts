@@ -61,7 +61,7 @@ import {
   isVisionSidecarConsumer,
   modelAcceptsImageInput,
 } from "../../vision/eligibility";
-import type { OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig, OcxComboCooldownWaitPolicy } from "../../types";
+import type { OcxCacheRetention, OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig, OcxComboCooldownWaitPolicy } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { notifyLiveConfigObservers, reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
@@ -94,7 +94,8 @@ function sparseComboConfig<T extends {
   reasoningEffortMode?: "strict" | "adaptive";
   defaultEffortMode?: "fallback" | "force";
   jevEffortMode?: "decide" | "client";
-}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode" | "jevEffortMode"> & {
+  cacheRetention?: OcxCacheRetention | null;
+}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode" | "jevEffortMode" | "cacheRetention"> & {
   cooldownMs?: number;
   waitForCooldownMs?: number;
   cooldownWaitPolicy?: OcxComboCooldownWaitPolicy;
@@ -102,6 +103,7 @@ function sparseComboConfig<T extends {
   reasoningEffortMode?: "adaptive";
   defaultEffortMode?: "force";
   jevEffortMode?: "client";
+  cacheRetention?: OcxCacheRetention;
 } {
   const {
     cooldownMs,
@@ -111,6 +113,7 @@ function sparseComboConfig<T extends {
     reasoningEffortMode,
     defaultEffortMode,
     jevEffortMode,
+    cacheRetention,
     ...rest
   } = combo;
   return {
@@ -126,6 +129,8 @@ function sparseComboConfig<T extends {
     ...(reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
     ...(defaultEffortMode === "force" ? { defaultEffortMode: "force" as const } : {}),
     ...(jevEffortMode === "client" ? { jevEffortMode: "client" as const } : {}),
+    // Inheriting is the default, so only an explicit retention is written back.
+    ...(cacheRetention ? { cacheRetention } : {}),
   };
 }
 

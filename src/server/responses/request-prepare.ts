@@ -183,6 +183,7 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
+import { disarmCacheKeepalive } from "./cache-keepalive";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -233,6 +234,12 @@ export async function prepareResponsesRequest(
   requestDispatchers: ResponsesDispatchers,
 ) {
   const { options, config, req, logCtx } = requestContext;
+  // A real call on a thread supersedes any keepalive armed for it. A keepalive combo re-arms the
+  // thread after its child call succeeds, so a switch to any other model stops the refreshes.
+  if (!options.cacheKeepalivePing && !options.comboAttempt) {
+    const ownThreadId = req.headers.get("thread-id")?.trim();
+    if (ownThreadId) disarmCacheKeepalive(ownThreadId);
+  }
   const policyScope = options.policyRequestScope ?? { triedDestinations: new Set<string>() };
   const concreteSelection = options.comboAttempt || options.policyFallbackCandidate !== undefined;
 
@@ -526,6 +533,19 @@ export async function prepareResponsesRequest(
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
+    // Per-turn retention: a combo's fixed TTL (the explicitly chosen model) wins; otherwise
+    // spawned children, which call back-to-back and then end, may run a shorter TTL than the
+    // interactive thread. Same exact child markers as subagentEffortCap.
+    const turnCacheRetention = options.comboCacheRetention
+      ?? (threadSpawn ? config.subagentCacheRetention : undefined);
+    if (turnCacheRetention) {
+      parsed._cacheRetention = turnCacheRetention;
+      logCtx.cacheRetentionOverride = turnCacheRetention;
+    }
+    if (options.cacheKeepalivePing) {
+      parsed._cacheKeepalivePing = true;
+      logCtx.cacheKeepalive = true;
+    }
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
     // observation at the adapter seam still finds it.
@@ -1162,6 +1182,8 @@ export async function prepareResponsesRequest(
             "_clientThreadId",
             "_codexOwnThreadId",
             "_promptCacheKeyIsSharedCohort",
+            "_cacheRetention",
+            "_cacheKeepalivePing",
             "_cursorClientThreadId",
             "_reasoningReplayScope",
             "_nativeReasoningRetention",

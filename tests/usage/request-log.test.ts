@@ -445,6 +445,48 @@ describe("request log metadata", () => {
     }
   });
 
+  test("persists the cache retention override and the 1-hour cache write share", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-cache-retention-usage-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    try {
+      clearRequestLogsForTests();
+      resetUsageReadCacheForTests();
+      const usage: OcxUsage = {
+        inputTokens: 130,
+        outputTokens: 2,
+        cachedInputTokens: 100,
+        cacheReadInputTokens: 100,
+        cacheCreationInputTokens: 30,
+        cacheCreation1hInputTokens: 20,
+      };
+      addFinalRequestLog("ocx-cache-retention", 1, {
+        model: "claude-opus-5-5",
+        provider: "anthropic",
+        cacheRetentionOverride: "short",
+        usage,
+      }, 200);
+      addFinalRequestLog("ocx-cache-retention-bogus", 2, {
+        model: "claude-opus-5-5",
+        provider: "anthropic",
+        cacheRetentionOverride: "forever" as never,
+      }, 200);
+
+      const persisted = readUsageEntries();
+      const marked = persisted.find(entry => entry.requestId === "ocx-cache-retention");
+      expect(marked?.cacheRetentionOverride).toBe("short");
+      expect(marked?.usage?.cacheCreation1hInputTokens).toBe(20);
+      expect(persisted.find(entry => entry.requestId === "ocx-cache-retention-bogus")).not.toHaveProperty("cacheRetentionOverride");
+      expect(getRequestLogEntries().find(entry => entry.requestId === "ocx-cache-retention")?.cacheRetentionOverride).toBe("short");
+    } finally {
+      clearRequestLogsForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      resetUsageReadCacheForTests();
+      removeTreeWithRetry(home);
+    }
+  });
+
   test("persists transport finality evidence from the final request log", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-finality-usage-"));
     const previousHome = process.env.OPENCODEX_HOME;

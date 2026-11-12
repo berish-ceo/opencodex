@@ -18,11 +18,11 @@ import { createOpenAIChatAdapter } from "./openai-chat";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import { createZedAdapter } from "./zed";
-import type { OcxProviderConfig } from "../types";
+import type { OcxCacheRetention, OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { withInputMediaGuard } from "./input-media-guard";
 
-export type AdapterCacheRetention = "none" | "short" | "long";
+export type AdapterCacheRetention = OcxCacheRetention;
 
 export interface AdapterFactoryContext {
   cacheRetention?: AdapterCacheRetention;
