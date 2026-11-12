@@ -22,7 +22,8 @@ import {
   type RequestCloseReason,
   type RequestTerminalStatus,
 } from "./request-outcome";
-import type { AttemptTierOutcome, OcxUsage } from "../types";
+import type { AttemptTierOutcome, OcxCacheRetention, OcxUsage } from "../types";
+import { isOcxCacheRetention } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
@@ -335,6 +336,10 @@ export interface PersistedUsageEntry {
   requestedModel?: string;
   /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
   shadowCallRewrittenFrom?: string;
+  /** Per-turn prompt-cache retention override (subagentCacheRetention on spawned children). */
+  cacheRetentionOverride?: OcxCacheRetention;
+  /** True for an internal prompt-cache keepalive refresh. */
+  cacheKeepalive?: boolean;
   /** Reasoning effort / service-tier metadata for GUI Logs after restart. */
   requestedEffort?: string;
   /** Adapter-normalized tier and exact upstream parameter emitted for this request. */
@@ -1066,6 +1071,8 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
       ? { requestedModel: encodePersistedRequestedModel(entry.requestedModel) }
       : {}),
     ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
+    ...(isOcxCacheRetention(entry.cacheRetentionOverride) ? { cacheRetentionOverride: entry.cacheRetentionOverride } : {}),
+    ...(entry.cacheKeepalive === true ? { cacheKeepalive: true } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
       ? { requestedEffort: capMetadataString(entry.requestedEffort) }
       : {}),

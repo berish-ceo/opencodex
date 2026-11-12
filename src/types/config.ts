@@ -9,6 +9,38 @@ export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRot
 export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 export type { OcxClaudeCodeToolLoadingConfig } from "./claude-tool-loading";
 
+/**
+ * Anthropic prompt-cache retention policy.
+ * - "none": no cache_control breakpoints.
+ * - "short": every breakpoint uses the 5-minute TTL (Anthropic default).
+ * - "long": every breakpoint uses the 1-hour TTL (writes bill at 2x instead of 1.25x).
+ * - "hybrid": the stable prefix (system/tools and history up to the latest human message) uses
+ *   the 1-hour TTL while the agent-loop tail uses 5 minutes, so a long pause between human turns
+ *   rewrites only the last turn instead of the whole context, and tool-loop growth bills at 1.25x.
+ */
+export type OcxCacheRetention = "none" | "short" | "long" | "hybrid";
+
+/**
+ * Prompt-cache keepalive for a combo: after each real call on a thread, the proxy re-sends that
+ * call's request as an Anthropic pre-warm (`max_tokens: 0`), which reads the cached prefix and
+ * refreshes its 5-minute TTL without generating output. Every real call restarts the window.
+ */
+export interface OcxCacheKeepaliveConfig {
+  /** Seconds between refreshes, measured from the last call or refresh. Default 270; 30..290. */
+  intervalSec?: number;
+  /** Minutes after the last real call during which refreshes may be sent. Default 30; 1..120. */
+  maxIdleMin?: number;
+  /** Skip threads whose last call was smaller than this many input tokens. Default 30000. */
+  minContextTokens?: number;
+}
+
+const OCX_CACHE_RETENTIONS: ReadonlySet<string> = new Set<OcxCacheRetention>(["none", "short", "long", "hybrid"]);
+
+/** Closed-vocabulary guard for retention values read back from persisted logs. */
+export function isOcxCacheRetention(value: unknown): value is OcxCacheRetention {
+  return typeof value === "string" && OCX_CACHE_RETENTIONS.has(value);
+}
+
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
   /**
@@ -1133,11 +1165,18 @@ export interface OcxConfig {
   /** Evictable retained app-state budget in MiB. Default 256; valid 64..4096. */
   appOwnedMemoryBudgetMb?: number;
   /**
-   * Anthropic prompt-cache retention: "short" = 5-min ephemeral, "long" = 1-hour extended,
-   * "none" = disabled. Unset = "long" on first-party api.anthropic.com, "short" on
-   * Anthropic-compatible endpoints (adapters/anthropic/cache-retention.ts).
+   * Anthropic prompt-cache retention for every turn; see OcxCacheRetention. Unset = "long" on
+   * first-party api.anthropic.com, "short" on Anthropic-compatible endpoints
+   * (adapters/anthropic/cache-retention.ts).
    */
-  cacheRetention?: "none" | "short" | "long";
+  cacheRetention?: OcxCacheRetention;
+  /**
+   * Anthropic prompt-cache retention for spawned sub-agent turns only — requests carrying
+   * codex-rs's spawned-child markers (same detection as subagentEffortCap). Unset inherits
+   * cacheRetention. Lets the interactive thread keep a long TTL across human pauses while
+   * delegated children, which call back-to-back and then end, avoid the 1-hour write premium.
+   */
+  subagentCacheRetention?: OcxCacheRetention;
   /** Web-search sidecar: route web_search for non-OpenAI models through a gpt-mini via ChatGPT passthrough. */
   webSearchSidecar?: OcxWebSearchSidecarConfig;
   /**
@@ -1523,6 +1562,17 @@ export interface OcxComboConfig {
    * mandated model id; exact-match requests route here before any provider resolution.
    */
   alias?: string;
+  /**
+   * Anthropic prompt-cache retention for every turn this combo serves. Wins over
+   * subagentCacheRetention and cacheRetention, so a single-target combo publishes the same
+   * model under a fixed TTL (for example "<model>-ttl5" with "short"). Unset inherits.
+   */
+  cacheRetention?: OcxCacheRetention;
+  /**
+   * Keep this combo's 5-minute prompt cache warm between calls on a thread; see
+   * OcxCacheKeepaliveConfig. Requires a short-tail retention ("short" or "hybrid", or unset).
+   */
+  cacheKeepalive?: OcxCacheKeepaliveConfig;
   /**
    * Explicitly allow a bare OpenAI-native alias (for example `gpt-5.6-sol`) to
    * be represented by this routed combo. Never inferred from `alias`.

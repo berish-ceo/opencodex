@@ -1,5 +1,5 @@
 import { createRegisteredAdapter } from "../adapters/registry";
-import type { OcxProviderConfig } from "../types";
+import type { OcxCacheRetention, OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { type InboundWire, providerModelWireDefault } from "../providers/registry";
@@ -64,7 +64,7 @@ export function resolveWireProtocolOverride(
 /** Build the provider adapter for a resolved provider config. */
 export function resolveAdapter(
   providerConfig: OcxProviderConfig,
-  cacheRetention?: "none" | "short" | "long",
+  cacheRetention?: OcxCacheRetention,
   providerId?: string,
 ) {
   return createRegisteredAdapter(providerConfig, { cacheRetention, ...(providerId ? { providerId } : {}) });

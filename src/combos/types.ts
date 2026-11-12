@@ -7,7 +7,8 @@ import {
 } from "./jev-session-pin-config";
 import { isCodexReasoningEffort, isDeclaredReasoningEffort } from "../reasoning-effort";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
-import type { OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboJevEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
+import type { OcxCacheKeepaliveConfig, OcxCacheRetention, OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboJevEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
+import { isOcxCacheRetention } from "../types";
 import { COMBO_NAMESPACE, isValidComboId, resolveComboId, targetKey } from "./identifiers";
 import {
   CANONICAL_JEV_DECISION_PROVIDER,
@@ -39,6 +40,46 @@ const NATIVE_OPENAI_FAMILY_PATTERN = /^(?:gpt-|o1-|o3-|o4-|codex-)/;
 export interface ComboValidationIssue {
   path: Array<string | number>;
   message: string;
+}
+
+export const CACHE_KEEPALIVE_DEFAULTS: Required<OcxCacheKeepaliveConfig> = {
+  intervalSec: 270,
+  maxIdleMin: 30,
+  minContextTokens: 30_000,
+};
+
+const CACHE_KEEPALIVE_LIMITS = {
+  // Below the 5-minute TTL with margin; refreshing faster only adds reads.
+  intervalSec: [30, 290],
+  maxIdleMin: [1, 120],
+  minContextTokens: [0, 10_000_000],
+} as const satisfies Record<keyof OcxCacheKeepaliveConfig, readonly [number, number]>;
+
+function cacheKeepaliveIssues(value: unknown, retention: unknown): ComboValidationIssue[] {
+  if (value === undefined) return [];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [{ path: ["cacheKeepalive"], message: "cacheKeepalive must be an object" }];
+  }
+  const issues: ComboValidationIssue[] = [];
+  for (const [key, [min, max]] of Object.entries(CACHE_KEEPALIVE_LIMITS)) {
+    const field = (value as Record<string, unknown>)[key];
+    if (field !== undefined && (typeof field !== "number" || !Number.isInteger(field) || field < min || field > max)) {
+      issues.push({ path: ["cacheKeepalive", key], message: `cacheKeepalive.${key} must be an integer from ${min} to ${max}` });
+    }
+  }
+  // A 1-hour or disabled cache has nothing to keep warm.
+  if (retention === "long" || retention === "none") {
+    issues.push({ path: ["cacheKeepalive"], message: 'cacheKeepalive requires cacheRetention "short", "hybrid", or unset' });
+  }
+  return issues;
+}
+
+function normalizeCacheKeepalive(raw: OcxCacheKeepaliveConfig): Required<OcxCacheKeepaliveConfig> {
+  return {
+    intervalSec: raw.intervalSec ?? CACHE_KEEPALIVE_DEFAULTS.intervalSec,
+    maxIdleMin: raw.maxIdleMin ?? CACHE_KEEPALIVE_DEFAULTS.maxIdleMin,
+    minContextTokens: raw.minContextTokens ?? CACHE_KEEPALIVE_DEFAULTS.minContextTokens,
+  };
 }
 
 export interface NormalizedComboTarget {
@@ -80,6 +121,10 @@ export interface NormalizedComboConfig {
   jevEffortMode: OcxComboJevEffortMode;
   /** Disable image input; `auto` preserves the intersection derived from all targets. */
   imageInput: "auto" | "disabled";
+  /** Prompt-cache retention forced on every child turn; absent inherits the global policy. */
+  cacheRetention?: OcxCacheRetention;
+  /** Prompt-cache keepalive with defaults applied; absent means no keepalive. */
+  cacheKeepalive?: Required<OcxCacheKeepaliveConfig>;
   /** Trimmed public alias, or null when the combo keeps the default `combo/<id>` slug. */
   alias: string | null;
   /** Explicit native-family alias opt-in. */
@@ -294,6 +339,10 @@ export function comboConfigIssues(
   if (body.imageInput !== undefined && body.imageInput !== "auto" && body.imageInput !== "disabled") {
     issues.push({ path: ["imageInput"], message: 'imageInput must be "auto" or "disabled"' });
   }
+  if (body.cacheRetention !== undefined && !isOcxCacheRetention(body.cacheRetention)) {
+    issues.push({ path: ["cacheRetention"], message: 'cacheRetention must be "none", "short", "long", or "hybrid"' });
+  }
+  issues.push(...cacheKeepaliveIssues(body.cacheKeepalive, body.cacheRetention));
   if (body.reasoningEffortMode !== undefined
     && body.reasoningEffortMode !== "strict"
     && body.reasoningEffortMode !== "adaptive") {
@@ -585,6 +634,10 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     reasoningEffortMode: raw.reasoningEffortMode === "adaptive" ? "adaptive" : "strict",
     jevEffortMode: raw.jevEffortMode === "client" ? "client" : "decide",
     imageInput: raw.imageInput === "disabled" ? "disabled" : "auto",
+    ...(isOcxCacheRetention(raw.cacheRetention) ? { cacheRetention: raw.cacheRetention } : {}),
+    ...(raw.cacheKeepalive && typeof raw.cacheKeepalive === "object"
+      ? { cacheKeepalive: normalizeCacheKeepalive(raw.cacheKeepalive) }
+      : {}),
     alias: alias || null,
     nativeAlias: raw.nativeAlias === true,
     displayName: displayName || null,

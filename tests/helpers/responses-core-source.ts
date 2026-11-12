@@ -43,6 +43,9 @@ export const RESPONSES_CORE_MODULES = [
   "jev-model-invoke.ts",
   // Reached from core-combo.ts: JEV effort choices and resolved native quota identity.
   "jev-combo-choice.ts",
+  // Reached from core-combo.ts: the combo prompt-cache keepalive scheduler and its replay turn.
+  "cache-keepalive-combo.ts",
+  "cache-keepalive.ts",
   "request-prepare.ts",
   "turn-membership.ts",
   "policy-request-scope.ts",

@@ -3,6 +3,7 @@ import type { NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import type { OcxTool, OcxToolChoice } from "./tools";
 import type { TierDecision, TierObservationContext } from "./provider";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import type { OcxCacheRetention } from "./config";
 
 /** Exact provider/credential namespace for process-local reasoning replay. */
 export interface OcxReasoningReplayIdentity {
@@ -119,6 +120,14 @@ export interface OcxParsedRequest {
   _codexOwnThreadId?: string;
   /** True when promptCacheKey identifies a shared cache cohort rather than one conversation. */
   _promptCacheKeyIsSharedCohort?: boolean;
+  /**
+   * Per-turn prompt-cache retention override resolved at request preparation (currently:
+   * subagentCacheRetention for spawned sub-agent turns). Unset means the adapter's configured
+   * retention applies.
+   */
+  _cacheRetention?: OcxCacheRetention;
+  /** Internal cache keepalive refresh: the adapter sends the request as a zero-output pre-warm. */
+  _cacheKeepalivePing?: boolean;
   /** Cursor-only thread owner; may be an opaque process-local Desktop session/thread identity. */
   _cursorClientThreadId?: string;
   /** Conversation/provider/account/model-bound namespace for reasoning replay state. */

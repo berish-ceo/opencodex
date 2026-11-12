@@ -23,7 +23,8 @@ import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { readCodexCatalogPath } from "../codex/catalog";
-import type { AttemptTierOutcome, OcxProviderConfig, OcxUsage } from "../types";
+import type { AttemptTierOutcome, OcxCacheRetention, OcxProviderConfig, OcxUsage } from "../types";
+import { isOcxCacheRetention } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { protocolTraceForRequest } from "../protocols/trace";
@@ -186,6 +187,10 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics {
   shadowCallRewrittenFrom?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
   comboId?: string;
+  /** Per-turn prompt-cache retention override (subagentCacheRetention on spawned children). */
+  cacheRetentionOverride?: OcxCacheRetention;
+  /** True for an internal prompt-cache keepalive refresh. */
+  cacheKeepalive?: boolean;
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
@@ -344,6 +349,10 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   requestedAlias?: string;
   /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
   shadowCallRewrittenFrom?: string;
+  /** Per-turn prompt-cache retention override (subagentCacheRetention on spawned children). */
+  cacheRetentionOverride?: OcxCacheRetention;
+  /** True for an internal prompt-cache keepalive refresh. */
+  cacheKeepalive?: boolean;
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
@@ -512,6 +521,10 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.shadowCallRewrittenFrom
       ? { shadowCallRewrittenFrom: entry.shadowCallRewrittenFrom }
       : {}),
+    ...(isOcxCacheRetention(entry.cacheRetentionOverride)
+      ? { cacheRetentionOverride: entry.cacheRetentionOverride }
+      : {}),
+    ...(entry.cacheKeepalive === true ? { cacheKeepalive: true } : {}),
     ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
     ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
     ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
@@ -714,6 +727,10 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.shadowCallRewrittenFrom
         ? { shadowCallRewrittenFrom: entry.shadowCallRewrittenFrom }
         : {}),
+      ...(isOcxCacheRetention(entry.cacheRetentionOverride)
+        ? { cacheRetentionOverride: entry.cacheRetentionOverride }
+        : {}),
+      ...(entry.cacheKeepalive === true ? { cacheKeepalive: true } : {}),
       ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
       ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
       ...(entry.reasoningWireField ? { reasoningWireField: entry.reasoningWireField } : {}),
@@ -1589,6 +1606,8 @@ function writeFinalRequestLog(
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
     ...(logCtx.requestedAlias ? { requestedAlias: logCtx.requestedAlias } : {}),
     ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
+    ...(isOcxCacheRetention(logCtx.cacheRetentionOverride) ? { cacheRetentionOverride: logCtx.cacheRetentionOverride } : {}),
+    ...(logCtx.cacheKeepalive === true ? { cacheKeepalive: true } : {}),
     ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
     ...(logCtx.effectiveEffort ? { effectiveEffort: logCtx.effectiveEffort } : {}),
     ...(logCtx.reasoningWireField ? { reasoningWireField: logCtx.reasoningWireField } : {}),

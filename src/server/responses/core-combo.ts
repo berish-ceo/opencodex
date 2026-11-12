@@ -32,6 +32,7 @@ import type {
 } from "../../lib/request-execution-budget";
 import type { OcxComboDefaultEffort, OcxConfig, OcxUsage } from "../../types";
 import type { RequestLogContext } from "../request-log";
+import { armComboCacheKeepalive } from "./cache-keepalive-combo";
 import type { HandleResponsesOptions, ResponsesDispatchers, ConsumedComboFailure } from "./core-options";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import {
@@ -419,6 +420,8 @@ export async function executeComboResponses(
   // internal request carries the caller's captured scope on options.admissionScope even though
   // its own admission is the host's broad key; recomputing from options.admission would lose it.
   const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
+  // Recorded on the logical row so reports can attribute it whichever child serves the turn.
+  if (combo.cacheRetention) logCtx.cacheRetentionOverride = combo.cacheRetention;
   // Present only when an opted-in ingress supplied a native source; otherwise every child
   // takes the bridge below exactly as before.
   const protocolLanes = createComboProtocolLanes({
@@ -1236,6 +1239,7 @@ export async function executeComboResponses(
         comboAttempt: true,
         comboInitialSend: initialSend,
         comboDispatchPermit: hopDecision?.allowed ? hopDecision.permit : undefined,
+        ...(combo.cacheRetention ? { comboCacheRetention: combo.cacheRetention } : {}),
         comboReplaySnapshot,
         deferCodexResetDerivedCooldown,
         onBridgeUsageBound: () => {
@@ -1345,6 +1349,15 @@ export async function executeComboResponses(
       callbackGate.commit();
       childCommitted = true;
       forwardChildUsage();
+      // Only an ordinary Responses child (Codex ingress) is replayed; native protocol lanes are not.
+      if (!options.protocolSource) {
+        armComboCacheKeepalive({
+          combo, requestedModel, target: pick.target, url: req.url, childHeaders, childBody,
+          comboReplaySnapshot, options, config, startedAt: started, childLog,
+          ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
+          handleResponses: requestDispatchers.handleResponses,
+        });
+      }
       return response;
     }
 

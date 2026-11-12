@@ -1,7 +1,8 @@
 import { credentialDomainFor } from "../../protocols/opaque-state";
-import type { OcxProviderConfig } from "../../types";
+import type { OcxCacheRetention, OcxProviderConfig } from "../../types";
 
-export type AnthropicCacheRetention = "none" | "short" | "long";
+/** Includes the local patch's "hybrid"; the native passthrough leaves caller breakpoints as for "short". */
+export type AnthropicCacheRetention = OcxCacheRetention;
 
 /**
  * The retention an omitted `cacheRetention` resolves to for one destination.
